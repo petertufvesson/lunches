@@ -36,15 +36,21 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   }
-  .layout {
-    display: flex; gap: 24px; max-width: 1000px; margin: 0 auto; align-items: flex-start;
+  .page {
+    max-width: 1000px; margin: 0 auto;
     /* the safe areas keep the page clear of the notch when opened from the home screen */
     padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
       max(48px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
-  #panel-toggle { display: none; }
+  .layout { display: flex; gap: 24px; align-items: flex-start; }
+  .actions { display: flex; gap: 8px; }
+  #panel-toggle[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .active-count {
+    display: inline-block; margin-left: 6px; min-width: 1.4em; padding: 0 5px; border-radius: 999px;
+    background: var(--accent); color: var(--card); font-size: .75rem; font-weight: 600; text-align: center;
+  }
   aside {
-    flex: 0 0 240px; position: sticky; top: 24px;
+    flex: 0 0 240px; position: sticky; top: 24px; margin-top: 18px;
     background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
   }
   aside h2 { margin: 0 0 8px; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
@@ -85,16 +91,8 @@
   .badge-veg { background: var(--veg-bg); color: var(--veg); }
   .empty { color: var(--muted); margin-top: 18px; }
   @media (max-width: 640px) {
-    .layout { flex-direction: column; align-items: stretch; gap: 16px; }
-    aside { position: static; flex: none; padding: 10px 14px; }
-    /* the panel is folded on small screens, so the menus come first */
-    #panel-toggle {
-      display: flex; width: 100%; justify-content: space-between; align-items: center;
-      border: 0; background: none; padding: 4px 0; font-weight: 600;
-    }
-    #panel-toggle .hint { color: var(--muted); font-weight: 400; font-size: .9rem; }
-    aside.open #panel-toggle { margin-bottom: 8px; }
-    aside:not(.open) #panel-body { display: none; }
+    .layout { flex-direction: column; align-items: stretch; gap: 0; }
+    aside { position: static; flex: none; }
   }
   header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   h1 { margin: 0; font-size: 1.8rem; }
@@ -127,12 +125,21 @@
 </style>
 </head>
 <body>
+<div class="page">
+<header>
+  <div>
+    <h1>Dagens lunch</h1>
+    <div id="today"></div>
+  </div>
+  <div class="actions">
+    <button id="panel-toggle" type="button" aria-expanded="false" aria-controls="panel">
+      Filter<span id="filter-active" class="active-count" hidden></span>
+    </button>
+    <button id="reload" type="button">Uppdatera</button>
+  </div>
+</header>
 <div class="layout">
-<aside id="panel">
-  <button id="panel-toggle" type="button" aria-expanded="false" aria-controls="panel-body">
-    Filter och inställningar <span class="hint">Visa ▾</span>
-  </button>
-  <div id="panel-body">
+<aside id="panel" hidden>
   <h2>Restauranger</h2>
   <div id="filter"></div>
   <div class="filter-actions">
@@ -158,20 +165,13 @@
   <div id="add-status" class="status" aria-live="polite"></div>
   <div id="file-status" class="status" aria-live="polite"></div>
   <button id="save-file" type="button" hidden>Spara till fil</button>
-  </div>
 </aside>
 <main>
-  <header>
-    <div>
-      <h1>Dagens lunch</h1>
-      <div id="today"></div>
-    </div>
-    <button id="reload" type="button">Uppdatera</button>
-  </header>
   <section id="favorites" class="favorites" hidden></section>
   <div id="restaurants"></div>
   <div id="empty" class="empty" hidden>Ingen restaurang vald.</div>
 </main>
+</div>
 </div>
 
 <script src="restaurants.js"></script>
@@ -849,6 +849,18 @@ function applyCategoryFilter() {
   const favorites = document.getElementById("favorites");
   favorites.hidden = !favorites.querySelector("li:not([hidden])");
   writeHidden(HIDDEN_CATEGORIES_KEY, hiddenCategories);
+  showActiveFilters();
+}
+
+// The number on the Filter button: unchecked restaurants and categories, since the panel is
+// usually closed and a filter is easy to forget.
+function showActiveFilters() {
+  const count = restaurants.filter(r => hidden.has(r.url)).length +
+    CATEGORIES.filter(c => hiddenCategories.has(c.id)).length;
+  const badge = document.getElementById("filter-active");
+  badge.hidden = !count;
+  badge.textContent = String(count);
+  document.getElementById("panel-toggle").title = count ? count + " filter avbockade" : "";
 }
 
 // Kept in this browser: the restaurants (URLs) and categories (ids) that the filters hide, and
@@ -1279,13 +1291,11 @@ document.getElementById("none").addEventListener("click", () => setAll(false));
 document.getElementById("delete").addEventListener("click", deleteRestaurant);
 document.getElementById("add-form").addEventListener("submit", addRestaurant);
 document.getElementById("save-file").addEventListener("click", saveToFile);
-// Small screens: the panel opens and closes with its heading (see the CSS).
+// The panel with the filters is closed when the page opens; the Filter button opens and closes it.
 document.getElementById("panel-toggle").addEventListener("click", () => {
   const panel = document.getElementById("panel");
-  const open = panel.classList.toggle("open");
-  const toggle = document.getElementById("panel-toggle");
-  toggle.setAttribute("aria-expanded", String(open));
-  toggle.querySelector(".hint").textContent = open ? "Dölj ▴" : "Visa ▾";
+  panel.hidden = !panel.hidden;
+  document.getElementById("panel-toggle").setAttribute("aria-expanded", String(!panel.hidden));
 });
 showDate();
 showFileStatus();
