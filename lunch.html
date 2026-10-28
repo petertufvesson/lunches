@@ -140,6 +140,7 @@ const DEFAULT_RESTAURANTS = [
   { name: "Operagrillen", url: "https://www.malmoopera.se/mat-och-dryck/lunch-i-operagrillen" },
   { name: "Cafe Feed", url: "https://www.cafefeed.se/" },
   { name: "La Bonne Vie", url: "https://labonnevie.se/lunchmeny" },
+  { name: "Osteria di La", url: "https://osteriadila.se/" },
 ];
 
 // Pages with their own parser, by URL; other pages use parseGeneric.
@@ -156,6 +157,7 @@ const SITES = {
     text: { "X-Engine": "browser", "X-No-Cache": "true", "X-Wait-For-Selector": "#week_num", "X-Timeout": "30" },
   },
   "https://labonnevie.se/lunchmeny": { days: [1, 2, 3, 4, 5], parse: parseBonneVie },
+  "https://osteriadila.se/": { days: [1, 2, 3, 4, 5], parse: parseOsteria, load: loadOsteria },
 };
 
 function siteFor(r) {
@@ -175,7 +177,7 @@ function clean(s) {
 
 function formatPrice(s) {
   s = clean(s);
-  return /^\d+$/.test(s) ? s + " kr" : s.replace(/(\d)\s*kr/gi, "$1 kr");
+  return /^\d+$/.test(s) ? s + " kr" : s.replace(/(\d)\s*(kr|:-)/gi, "$1 kr");
 }
 
 const isPrice = s => /^[\d\s.,\/–-]*\d[\d\s.,\/–-]*(kr|:-)?([\s\/]*\d+\s*(kr|:-)?)*$/i.test(s);
@@ -383,6 +385,67 @@ function parseBonneVie(doc) {
   };
 }
 
+// The lunch menu is a PDF with a new address every week ("...lunchV44.pdf"), linked from the
+// home page. r.jina.ai returns the PDF's text as Markdown.
+async function loadOsteria(url) {
+  const home = await fetchProxied(url);
+  const link = [...home.querySelectorAll("a[href]")].map(a => a.getAttribute("href"))
+    .find(href => /lunch.*\.pdf$/i.test(href));
+  if (!link) {
+    throw new Error("hittade ingen lunchmeny (PDF) på sidan");
+  }
+  return fetchProxied(new URL(link, url).href.replace(/^http:/, "https:"), { "X-No-Cache": "true" });
+}
+
+// The PDF's text: section headings in capitals (PASTA, FISK), then per dish a name line and
+// description lines, the last ending with the price ("145:-"). The drinks follow "# V.44".
+function parseOsteria(text) {
+  const all = text.split("\n").map(clean).filter(Boolean);
+  const hours = all.map(l => l.match(/^>?\s*(Måndag\s*-\s*Fredag\s*[\d.:]+\s*-\s*[\d.:]+)/i)).find(Boolean);
+  const start = all.findIndex(l => /^#*\s*LUNCHMENY/i.test(l));
+  const items = [];
+  let week = null;
+  let category = "";
+  let dish = null;
+  for (const line of all.slice(start + 1)) {
+    const weekLine = line.match(/^#*\s*V\.?\s*(\d+)$/i);
+    if (weekLine) {
+      week = Number(weekLine[1]);
+      break;
+    }
+    if (line.startsWith(">")) {
+      continue;
+    }
+    if (isUpper(line) && !line.match(PRICE) && line.length < 30) {
+      category = line;
+      dish = null;
+      continue;
+    }
+    if (!category) {
+      continue;
+    }
+    const price = line.match(/(\d+)\s*:-\s*$/);
+    const rest = clean(line.replace(/(\d+)\s*:-\s*$/, ""));
+    if (!dish) {
+      dish = { category, name: rest, desc: "", price: "" };
+    } else if (rest) {
+      dish.desc = clean(dish.desc + " " + rest);
+    }
+    if (price) {
+      dish.price = price[1] + " kr";
+      items.push(dish);
+      dish = null;
+    }
+  }
+  const buffet = /salladsbuff/i.test(text) ? "Salladsbuffé, bröd och vatten ingår" : "";
+  return {
+    week,
+    period: week ? "Vecka " + week : "",
+    info: [hours ? hours[1].replace(/\s*-\s*/g, "–") : "", buffet].filter(Boolean).join(" · "),
+    groups: [{ title: "", items }],
+  };
+}
+
 // Fetched pages, by URL, until "Uppdatera" is clicked.
 const documents = new Map();
 
@@ -395,9 +458,15 @@ function fetchDocument(url) {
   return documents.get(url);
 }
 
-// Returns the page as a document, or as Markdown text for a site with text headers.
-async function fetchFresh(url) {
-  const text = SITES[url] && SITES[url].text;
+// Returns the page as a document, or as Markdown text for a site with text headers;
+// a site with load fetches its menu itself.
+function fetchFresh(url) {
+  const site = SITES[url];
+  return site && site.load ? site.load(url) : fetchProxied(url, site && site.text);
+}
+
+// text: headers for r.jina.ai, which then returns Markdown text instead of a document.
+async function fetchProxied(url, text) {
   let lastError = new Error("ingen proxy");
   for (const proxy of PROXIES) {
     if (text && !proxy.jina) {
@@ -448,7 +517,8 @@ const KEYWORDS = {
     "chorizo", "pancetta", "salsiccia", "prosciutto", "kebab", "schnitzel", "wallenberg", "pulled pork"],
   fish: ["fisk", "lax", "torsk", "sej", "kolja", "räk", "tonfisk", "sill", "strömming", "skaldjur", "mussl",
     "kräft", "hummer", "gös", "abborre", "rödspätta", "sjötunga", "röding", "makrill", "bläckfisk",
-    "krabb", "pilgrim", "scampi", "hälleflundra", "ostron", "kaviar", "löjrom"],
+    "krabb", "pilgrim", "scampi", "hälleflundra", "ostron", "kaviar", "löjrom", "sardell", "ansjovis",
+    "kummel", "pesce"],
   veg: ["vegan", "vegetar", "vego", "tofu", "halloumi", "svamp", "portobello", "bönor", "linser", "kikärt",
     "falafel", "mozzarella", "fetaost", "hummus", "quorn", "anamma", "oumph", "soja", "aubergine",
     "grönsak", "pumpa", "spenat", "paneer", "tempeh", "seitan", "ost"],
