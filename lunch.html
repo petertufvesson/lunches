@@ -53,6 +53,12 @@
   }
   .star:hover, li.favorite .star { color: var(--accent); }
   li.favorite .name { color: var(--accent); }
+  .keywords { display: none; margin-top: 2px; font-size: .8rem; color: var(--muted); font-style: italic; }
+  body.show-keywords .keywords { display: block; }
+  aside label.option { margin-top: 6px; font-size: .9rem; }
+  .keyword-details { margin-top: 4px; font-size: .8rem; color: var(--muted); }
+  .keyword-details summary { cursor: pointer; font-size: .9rem; color: var(--text); padding: 3px 0; }
+  .keyword-details p { margin: 6px 0; line-height: 1.5; }
   .count { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
   section.favorites { border-color: var(--accent); }
   main { flex: 1; min-width: 0; }
@@ -108,6 +114,11 @@
   </div>
   <h2 class="second">Kategori</h2>
   <div id="category-filter"></div>
+  <label class="option"><input id="show-keywords" type="checkbox"> Visa nyckelord</label>
+  <details class="keyword-details">
+    <summary>Alla nyckelord</summary>
+    <div id="keyword-list"></div>
+  </details>
   <h2 class="second">Hantera</h2>
   <div class="row">
     <select id="restaurant-select" aria-label="Restaurang"></select>
@@ -596,41 +607,85 @@ const KEYWORDS = {
 // Words that make a dish vegetarian even if a meat word appears ("sojakött", "Anamma färs").
 const VEG_PRODUCTS = ["vegan", "vegetar", "vego", "anamma", "oumph", "quorn", "planted", "sojakött", "tofu",
   "grönsaksbiff"];
-// Sauces that do not make a dish a fish dish.
-const IGNORED = /ostronsås|fisksås/g;
+// Removed from the text before matching: sauces that do not make a dish a fish dish, and words
+// that contain a keyword by accident ("färska örter": färs, "rostade": ost).
+const IGNORED_WORDS = ["ostronsås", "fisksås", "färsk", "rostad"];
+const IGNORED = new RegExp(IGNORED_WORDS.join("|"), "g");
 
-// Returns the category ids of a dish: usually one, several when the guest chooses
-// ("med kyckling, räkor eller halloumi"), none when nothing is recognised.
-function categorize(item) {
+// The restaurant's own label decides first (Operagrillen: KÖTT, FISK, VEGETARISK, VEGANSK).
+const LABELS = { meat: /kött|meat/, fish: /fisk|skaldjur|fish/, veg: /veg/ };
+
+// Returns the category ids of a dish, usually one, several when the guest chooses
+// ("med kyckling, räkor eller halloumi"), none when nothing is recognised, and per id the
+// words that decided it ({ cats, reasons }).
+function categorizeWithReasons(item) {
   const label = (item.category || "").toLowerCase();
-  if (/kött|meat/.test(label)) {
-    return ["meat"];
-  }
-  if (/fisk|skaldjur|fish/.test(label)) {
-    return ["fish"];
-  }
-  if (/veg/.test(label)) {
-    return ["veg"];
+  for (const c of CATEGORIES) {
+    if (LABELS[c.id].test(label)) {
+      return { cats: [c.id], reasons: { [c.id]: ["märkt " + clean(item.category)] } };
+    }
   }
   const text = (item.name + " " + item.desc).toLowerCase().replace(IGNORED, "");
-  const has = words => words.some(w => text.includes(w));
-  const found = CATEGORIES.map(c => c.id).filter(id => has(KEYWORDS[id]));
+  const matching = words => words.filter(w => text.includes(w));
+  const reasons = {};
+  CATEGORIES.forEach(c => {
+    const words = matching(KEYWORDS[c.id]);
+    if (words.length) {
+      reasons[c.id] = words;
+    }
+  });
+  const found = Object.keys(reasons);
+  const pick = cats => ({ cats, reasons: Object.fromEntries(cats.map(id => [id, reasons[id]])) });
   if (/\beller\b/.test(text)) {
-    return found;
+    return pick(found);
   }
-  if (has(VEG_PRODUCTS)) {
-    return ["veg"];
+  const vegProducts = matching(VEG_PRODUCTS);
+  if (vegProducts.length) {
+    return { cats: ["veg"], reasons: { veg: vegProducts } };
   }
   const animal = found.filter(id => id !== "veg");
-  return animal.length ? animal : found;
+  return pick(animal.length ? animal : found);
 }
 
-function categoryBadges(cats) {
+function categorize(item) {
+  return categorizeWithReasons(item).cats;
+}
+
+const categoryLabel = id => CATEGORIES.find(c => c.id === id).label;
+
+// reasons: as from categorizeWithReasons; each badge then shows its words as a tooltip.
+function categoryBadges(cats, reasons) {
   const box = el("span", "badges");
   for (const id of cats) {
-    box.append(el("span", "badge badge-" + id, CATEGORIES.find(c => c.id === id).label));
+    const badge = el("span", "badge badge-" + id, categoryLabel(id));
+    if (reasons && reasons[id]) {
+      badge.title = "Nyckelord: " + reasons[id].join(", ");
+    }
+    box.append(badge);
   }
   return box;
+}
+
+// The line under a dish that shows the words behind its categories ("Visa nyckelord").
+function keywordLine(cats, reasons) {
+  const text = cats.length
+    ? cats.map(id => categoryLabel(id) + ": " + reasons[id].join(", ")).join(" · ")
+    : "Inga nyckelord hittades";
+  return el("div", "keywords", text);
+}
+
+// The keyword lists in the panel (under "Alla nyckelord").
+function buildKeywordList() {
+  const box = document.getElementById("keyword-list");
+  for (const c of CATEGORIES) {
+    const p = el("p");
+    p.append(categoryBadges([c.id]), " " + KEYWORDS[c.id].join(", "));
+    box.append(p);
+  }
+  box.append(el("p", "", "Väger tyngre än kött och fisk: " + VEG_PRODUCTS.join(", ")));
+  box.append(el("p", "", "Ignoreras: " + IGNORED_WORDS.join(", ")));
+  box.append(el("p", "", "Restaurangens egen märkning (KÖTT, FISK, VEG...) går först. Med \"eller\" i texten " +
+    "får rätten alla kategorier som hittas, annars går kött och fisk före vegetariskt."));
 }
 
 // A row for a dish of today's menu. restaurantName: shown above the dish (in the favorites).
@@ -648,18 +703,19 @@ function dishRow(dish, restaurantName) {
     info.append(el("div", "cat", label));
   }
   const name = el("div", "name", item.name);
-  name.append(categoryBadges(cats));
+  name.append(categoryBadges(cats, dish.reasons));
   info.append(name);
   if (item.desc) {
     info.append(el("div", "desc", item.desc));
   }
+  info.append(keywordLine(cats, dish.reasons));
   li.append(star, info, el("div", "price", item.price));
   showFavorite(li, !!known.favorite);
   return li;
 }
 
 // Fetches and shows the menu of a restaurant; entry.dishes gets today's dishes
-// ({ item, cats, known }), empty when the restaurant has no lunch today.
+// ({ item, cats, reasons, known }), empty when the restaurant has no lunch today.
 async function showRestaurant(r, entry, now) {
   const section = entry.section;
   entry.state = "loading";
@@ -711,7 +767,7 @@ async function showRestaurant(r, entry, now) {
     }
     const list = el("ul");
     for (const item of group.items) {
-      const dish = { item, cats: categorize(item), known: recordDish(r.url, item.name) };
+      const dish = { item, ...categorizeWithReasons(item), known: recordDish(r.url, item.name) };
       if (servesToday) {
         entry.dishes.push(dish);
       }
@@ -772,6 +828,7 @@ function applyCategoryFilter() {
 const PENDING_KEY = "lunch.pendingRestaurants";
 const HIDDEN_KEY = "lunch.hiddenUrls";
 const HIDDEN_CATEGORIES_KEY = "lunch.hiddenCategories";
+const SHOW_KEYWORDS_KEY = "lunch.showKeywords";
 
 function readStored(key, fallback) {
   try {
@@ -1174,6 +1231,14 @@ document.getElementById("save-file").addEventListener("click", saveToFile);
 showDate();
 showFileStatus();
 buildCategoryFilter();
+buildKeywordList();
+const showKeywords = document.getElementById("show-keywords");
+showKeywords.checked = readStored(SHOW_KEYWORDS_KEY, false) === true;
+document.body.classList.toggle("show-keywords", showKeywords.checked);
+showKeywords.addEventListener("change", () => {
+  document.body.classList.toggle("show-keywords", showKeywords.checked);
+  writeStored(SHOW_KEYWORDS_KEY, showKeywords.checked);
+});
 buildRestaurants();
 </script>
 </body>
