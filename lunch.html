@@ -46,6 +46,7 @@
   .row button { padding: 3px 10px; font-size: .85rem; }
   button:disabled { opacity: .5; cursor: default; }
   .status { color: var(--muted); font-size: .85rem; margin-top: 6px; min-height: 1em; }
+  #save-file { margin-top: 6px; padding: 3px 10px; font-size: .85rem; }
   main { flex: 1; min-width: 0; }
   .badges { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: 2px; }
   aside .badges { margin-left: 0; }
@@ -109,6 +110,8 @@
     <button id="add" type="submit">Lägg till</button>
   </form>
   <div id="add-status" class="status" aria-live="polite"></div>
+  <div id="file-status" class="status" aria-live="polite"></div>
+  <button id="save-file" type="button" hidden>Spara till fil</button>
 </aside>
 <main>
   <header>
@@ -123,6 +126,7 @@
 </main>
 </div>
 
+<script src="restaurants.js"></script>
 <script>
 // Pages are fetched through a proxy, since the restaurants' sites do not allow cross-origin
 // requests from a local file. The first proxy that answers is used.
@@ -133,8 +137,7 @@ const PROXIES = [
   { url: u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u) },
 ];
 
-// The restaurant list ({ name, url }) is kept in this browser. A default that is new since the
-// list was stored is added to it once (so a deleted default stays deleted).
+// Used when restaurants.js is missing, and for the names of these sites when they are added again.
 const DEFAULT_RESTAURANTS = [
   { name: "Ngon", url: "https://ngonrestaurang.se/dagen-lunch/" },
   { name: "Operagrillen", url: "https://www.malmoopera.se/mat-och-dryck/lunch-i-operagrillen" },
@@ -644,9 +647,9 @@ function applyCategoryFilter() {
   writeHidden(HIDDEN_CATEGORIES_KEY, hiddenCategories);
 }
 
-// Kept in this browser: the restaurant list, and the restaurants (URLs) and categories (ids)
-// that the filters hide.
-const RESTAURANTS_KEY = "lunch.restaurants";
+// Kept in this browser: the restaurants (URLs) and categories (ids) that the filters hide, and
+// a restaurant list that could not be written to restaurants.js yet.
+const PENDING_KEY = "lunch.pendingRestaurants";
 const HIDDEN_KEY = "lunch.hiddenUrls";
 const HIDDEN_CATEGORIES_KEY = "lunch.hiddenCategories";
 
@@ -671,21 +674,108 @@ function writeHidden(key, set) {
   writeStored(key, [...set]);
 }
 
-// The defaults this browser has seen; Ngon and Operagrillen were the defaults before this was stored.
-const KNOWN_DEFAULTS_KEY = "lunch.knownDefaults";
+// The restaurant list is read from restaurants.js next to this page (window.RESTAURANT_LIST).
+// Add and Delete write it back there with the File System Access API (Chrome, Edge): the file is
+// picked once, its handle is kept in IndexedDB, and Chrome may ask again for permission in a new
+// session. A list that could not be written is kept in this browser (PENDING_KEY) until it is.
+const fileList = Array.isArray(window.RESTAURANT_LIST) ? window.RESTAURANT_LIST : null;
+const canWriteFile = "showSaveFilePicker" in window;
 
 function readRestaurants() {
-  const stored = readStored(RESTAURANTS_KEY, null);
-  if (!Array.isArray(stored)) {
-    return [...DEFAULT_RESTAURANTS];
+  const pending = readStored(PENDING_KEY, null);
+  if (Array.isArray(pending) && JSON.stringify(pending) !== JSON.stringify(fileList)) {
+    return pending;
   }
-  const known = new Set(readStored(KNOWN_DEFAULTS_KEY, DEFAULT_RESTAURANTS.slice(0, 2).map(r => r.url)));
-  const added = DEFAULT_RESTAURANTS.filter(d => !known.has(d.url) && !stored.some(r => r.url === d.url));
-  return [...stored, ...added];
+  writeStored(PENDING_KEY, null);
+  return [...(fileList || DEFAULT_RESTAURANTS)];
+}
+
+function handleStore(mode, request) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open("lunch", 1);
+    open.onupgradeneeded = () => open.result.createObjectStore("handles");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const tx = open.result.transaction("handles", mode);
+      const result = request(tx.objectStore("handles"));
+      tx.oncomplete = () => resolve(result.result);
+      tx.onerror = () => reject(tx.error);
+    };
+  });
+}
+
+// The handle of restaurants.js with write permission, or null (no support, or cancelled).
+// Call it before anything else in a click handler: the dialogs need the click.
+async function fileHandle() {
+  if (!canWriteFile) {
+    return null;
+  }
+  try {
+    const stored = await handleStore("readonly", s => s.get("restaurants")).catch(() => null);
+    if (stored && (await stored.requestPermission({ mode: "readwrite" })) === "granted") {
+      return stored;
+    }
+    const handle = await window.showSaveFilePicker({
+      id: "lunch-restaurants",
+      suggestedName: "restaurants.js",
+      types: [{ description: "Restauranglista", accept: { "text/javascript": [".js"] } }],
+    });
+    if (handle.name !== "restaurants.js" && !confirm("Listan läses bara från restaurants.js bredvid lunch.html. Spara ändå till " + handle.name + "?")) {
+      return null;
+    }
+    await handleStore("readwrite", s => s.put(handle, "restaurants")).catch(() => null);
+    return handle;
+  } catch (e) {
+    return null;
+  }
+}
+
+function fileText(list) {
+  return "// Restaurants shown by lunch.html: edit by hand, or use Lägg till / Ta bort on the page.\n" +
+    "window.RESTAURANT_LIST = [\n" +
+    list.map(r => "  { name: " + JSON.stringify(r.name) + ", url: " + JSON.stringify(r.url) + " },\n").join("") +
+    "];\n";
+}
+
+// Writes the list to restaurants.js, or keeps it in this browser when that is not possible.
+async function saveRestaurants(handle) {
+  if (handle) {
+    try {
+      const writable = await handle.createWritable();
+      await writable.write(fileText(restaurants));
+      await writable.close();
+      writeStored(PENDING_KEY, null);
+      showFileStatus("Sparat i " + handle.name + ".");
+      return;
+    } catch (e) {
+      writeStored(PENDING_KEY, restaurants);
+      showFileStatus("Kunde inte spara i " + handle.name + " (" + e.message + "); ändringen finns bara i webbläsaren.");
+      return;
+    }
+  }
+  writeStored(PENDING_KEY, restaurants);
+  showFileStatus(canWriteFile
+    ? "Inte sparat i restaurants.js; ändringen finns bara i webbläsaren."
+    : "Webbläsaren kan inte spara till fil; ändringen finns bara här. Redigera restaurants.js för hand.");
+}
+
+function showFileStatus(message) {
+  const pending = Array.isArray(readStored(PENDING_KEY, null));
+  document.getElementById("file-status").textContent = message ||
+    (pending ? "Listan har ändringar som inte är sparade i restaurants.js."
+      : fileList ? "Listan läses från restaurants.js."
+        : "restaurants.js saknas; den inbyggda listan visas.");
+  document.getElementById("save-file").hidden = !(pending && canWriteFile);
+}
+
+async function saveToFile() {
+  const handle = await fileHandle();
+  if (handle) {
+    await saveRestaurants(handle);
+  }
 }
 
 let restaurants = readRestaurants();
-writeStored(KNOWN_DEFAULTS_KEY, DEFAULT_RESTAURANTS.map(r => r.url));
 const hidden = new Set(readStored(HIDDEN_KEY, []));
 const hiddenCategories = new Set(readStored(HIDDEN_CATEGORIES_KEY, []));
 const sections = new Map(); // restaurant URL -> { section, loaded }
@@ -751,7 +841,6 @@ function buildRestaurants() {
     container.append(sections.get(r.url).section);
   }
   document.getElementById("delete").disabled = !restaurants.length;
-  writeStored(RESTAURANTS_KEY, restaurants);
   applyFilter();
 }
 
@@ -770,12 +859,17 @@ function setAll(checked) {
   applyFilter();
 }
 
-function deleteRestaurant() {
+async function deleteRestaurant() {
   const url = document.getElementById("restaurant-select").value;
   const r = restaurants.find(x => x.url === url);
-  if (r && confirm("Ta bort " + r.name + "?")) {
+  if (!r) {
+    return;
+  }
+  const handle = await fileHandle();
+  if (confirm("Ta bort " + r.name + "?")) {
     restaurants = restaurants.filter(x => x !== r);
     buildRestaurants();
+    await saveRestaurants(handle);
   }
 }
 
@@ -816,6 +910,7 @@ async function addRestaurant(event) {
   }
   const button = document.getElementById("add");
   button.disabled = true;
+  const handle = await fileHandle();
   status.textContent = "Hämtar sidan …";
   let name;
   try {
@@ -832,6 +927,7 @@ async function addRestaurant(event) {
   hidden.delete(url);
   buildRestaurants();
   document.getElementById("restaurant-select").value = url;
+  await saveRestaurants(handle);
 }
 
 function showDate() {
@@ -856,7 +952,9 @@ document.getElementById("all").addEventListener("click", () => setAll(true));
 document.getElementById("none").addEventListener("click", () => setAll(false));
 document.getElementById("delete").addEventListener("click", deleteRestaurant);
 document.getElementById("add-form").addEventListener("submit", addRestaurant);
+document.getElementById("save-file").addEventListener("click", saveToFile);
 showDate();
+showFileStatus();
 buildCategoryFilter();
 buildRestaurants();
 </script>
