@@ -6,3 +6,7 @@ window.RESTAURANT_LIST = [
   { name: "La Bonne Vie", url: "https://labonnevie.se/lunchmeny" },
   { name: "Osteria di La", url: "https://osteriadila.se/" },
 ];
+
+// Dishes seen on the menus (added by the page); favorite: marked with the star.
+window.DISH_LIST = [
+];

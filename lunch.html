@@ -47,6 +47,12 @@
   button:disabled { opacity: .5; cursor: default; }
   .status { color: var(--muted); font-size: .85rem; margin-top: 6px; min-height: 1em; }
   #save-file { margin-top: 6px; padding: 3px 10px; font-size: .85rem; }
+  .star {
+    flex: none; align-self: flex-start; border: 0; background: none; padding: 0 2px; margin-top: -2px;
+    font-size: 1.25rem; line-height: 1.4; color: var(--muted); cursor: pointer;
+  }
+  .star:hover, li.favorite .star { color: var(--accent); }
+  li.favorite .name { color: var(--accent); }
   main { flex: 1; min-width: 0; }
   .badges { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: 2px; }
   aside .badges { margin-left: 0; }
@@ -607,8 +613,13 @@ async function showRestaurant(r, section, now) {
     const list = el("ul");
     for (const item of group.items) {
       const cats = categorize(item);
+      const known = recordDish(r.url, item.name);
       const li = el("li");
       li.dataset.cats = cats.join(" ");
+      li.dataset.dish = dishKey(known.restaurant, known.name);
+      const star = el("button", "star");
+      star.type = "button";
+      star.addEventListener("click", () => toggleFavorite(known));
       const dish = el("div", "dish");
       if (item.category) {
         dish.append(el("div", "cat", item.category));
@@ -619,7 +630,8 @@ async function showRestaurant(r, section, now) {
       if (item.desc) {
         dish.append(el("div", "desc", item.desc));
       }
-      li.append(dish, el("div", "price", item.price));
+      li.append(star, dish, el("div", "price", item.price));
+      showFavorite(li, !!known.favorite);
       list.append(li);
     }
     box.append(list);
@@ -674,20 +686,27 @@ function writeHidden(key, set) {
   writeStored(key, [...set]);
 }
 
-// The restaurant list is read from restaurants.js next to this page (window.RESTAURANT_LIST).
-// Add and Delete write it back there with the File System Access API (Chrome, Edge): the file is
-// picked once, its handle is kept in IndexedDB, and Chrome may ask again for permission in a new
-// session. A list that could not be written is kept in this browser (PENDING_KEY) until it is.
+// The restaurant list (window.RESTAURANT_LIST) and the dish list (window.DISH_LIST) are read from
+// restaurants.js next to this page. Changes are written back there with the File System Access API
+// (Chrome, Edge): the file is picked once, its handle is kept in IndexedDB, and Chrome may ask
+// again for permission in a new session. Lists that could not be written are kept in this browser
+// (PENDING_KEY, { restaurants, dishes }) until they are.
 const fileList = Array.isArray(window.RESTAURANT_LIST) ? window.RESTAURANT_LIST : null;
+const fileDishes = Array.isArray(window.DISH_LIST) ? window.DISH_LIST : [];
 const canWriteFile = "showSaveFilePicker" in window;
 
-function readRestaurants() {
-  const pending = readStored(PENDING_KEY, null);
-  if (Array.isArray(pending) && JSON.stringify(pending) !== JSON.stringify(fileList)) {
+function readData() {
+  let pending = readStored(PENDING_KEY, null);
+  if (Array.isArray(pending)) {
+    pending = { restaurants: pending, dishes: fileDishes }; // stored before there were dishes
+  }
+  const file = { restaurants: fileList || DEFAULT_RESTAURANTS, dishes: fileDishes };
+  if (pending && (JSON.stringify(pending.restaurants) !== JSON.stringify(fileList) ||
+      JSON.stringify(pending.dishes) !== JSON.stringify(fileDishes))) {
     return pending;
   }
   writeStored(PENDING_KEY, null);
-  return [...(fileList || DEFAULT_RESTAURANTS)];
+  return { restaurants: [...file.restaurants], dishes: file.dishes.map(d => ({ ...d })) };
 }
 
 function handleStore(mode, request) {
@@ -696,10 +715,14 @@ function handleStore(mode, request) {
     open.onupgradeneeded = () => open.result.createObjectStore("handles");
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
-      const tx = open.result.transaction("handles", mode);
-      const result = request(tx.objectStore("handles"));
-      tx.oncomplete = () => resolve(result.result);
-      tx.onerror = () => reject(tx.error);
+      try {
+        const tx = open.result.transaction("handles", mode);
+        const result = request(tx.objectStore("handles"));
+        tx.oncomplete = () => resolve(result.result);
+        tx.onerror = () => reject(tx.error);
+      } catch (e) {
+        reject(e);
+      }
     };
   });
 }
@@ -730,40 +753,69 @@ async function fileHandle() {
   }
 }
 
-function fileText(list) {
+// The stored handle if this page may already write to it (no dialog needed), else null.
+async function grantedHandle() {
+  if (!canWriteFile) {
+    return null;
+  }
+  try {
+    const stored = await handleStore("readonly", s => s.get("restaurants"));
+    return stored && (await stored.queryPermission({ mode: "readwrite" })) === "granted" ? stored : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+const js = value => JSON.stringify(value);
+
+function fileText(restaurantList, dishList) {
   return "// Restaurants shown by lunch.html: edit by hand, or use Lägg till / Ta bort on the page.\n" +
     "window.RESTAURANT_LIST = [\n" +
-    list.map(r => "  { name: " + JSON.stringify(r.name) + ", url: " + JSON.stringify(r.url) + " },\n").join("") +
+    restaurantList.map(r => "  { name: " + js(r.name) + ", url: " + js(r.url) + " },\n").join("") +
+    "];\n\n" +
+    "// Dishes seen on the menus (added by the page); favorite: marked with the star.\n" +
+    "window.DISH_LIST = [\n" +
+    dishList.map(d => "  { restaurant: " + js(d.restaurant) + ", name: " + js(d.name) +
+      ", firstSeen: " + js(d.firstSeen) + (d.favorite ? ", favorite: true" : "") + " },\n").join("") +
     "];\n";
 }
 
-// Writes the list to restaurants.js, or keeps it in this browser when that is not possible.
-async function saveRestaurants(handle) {
+let saving = Promise.resolve();
+
+// Writes both lists to restaurants.js, or keeps them in this browser when that is not possible.
+// Writes run one after the other.
+function saveData(handle) {
+  saving = saving.then(() => writeData(handle));
+  return saving;
+}
+
+async function writeData(handle) {
+  const data = { restaurants, dishes };
   if (handle) {
     try {
       const writable = await handle.createWritable();
-      await writable.write(fileText(restaurants));
+      await writable.write(fileText(restaurants, dishes));
       await writable.close();
       writeStored(PENDING_KEY, null);
       showFileStatus("Sparat i " + handle.name + ".");
       return;
     } catch (e) {
-      writeStored(PENDING_KEY, restaurants);
+      writeStored(PENDING_KEY, data);
       showFileStatus("Kunde inte spara i " + handle.name + " (" + e.message + "); ändringen finns bara i webbläsaren.");
       return;
     }
   }
-  writeStored(PENDING_KEY, restaurants);
+  writeStored(PENDING_KEY, data);
   showFileStatus(canWriteFile
-    ? "Inte sparat i restaurants.js; ändringen finns bara i webbläsaren."
-    : "Webbläsaren kan inte spara till fil; ändringen finns bara här. Redigera restaurants.js för hand.");
+    ? "Ändringar är inte sparade i restaurants.js ännu; de finns i webbläsaren."
+    : "Webbläsaren kan inte spara till fil; ändringar finns bara här. Redigera restaurants.js för hand.");
 }
 
 function showFileStatus(message) {
-  const pending = Array.isArray(readStored(PENDING_KEY, null));
+  const pending = readStored(PENDING_KEY, null) !== null;
   document.getElementById("file-status").textContent = message ||
-    (pending ? "Listan har ändringar som inte är sparade i restaurants.js."
-      : fileList ? "Listan läses från restaurants.js."
+    (pending ? "Det finns ändringar som inte är sparade i restaurants.js."
+      : fileList ? "Listorna läses från restaurants.js."
         : "restaurants.js saknas; den inbyggda listan visas.");
   document.getElementById("save-file").hidden = !(pending && canWriteFile);
 }
@@ -771,11 +823,59 @@ function showFileStatus(message) {
 async function saveToFile() {
   const handle = await fileHandle();
   if (handle) {
-    await saveRestaurants(handle);
+    await saveData(handle);
   }
 }
 
-let restaurants = readRestaurants();
+// Dishes are identified by restaurant and name (case and spacing ignored).
+const dishKey = (restaurant, name) => restaurant + " " + clean(name).toLowerCase();
+
+function today() {
+  const d = new Date();
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+let newDishTimer = null;
+
+// The dish in the list, added (and saved shortly after, together with others) if it is new.
+function recordDish(restaurant, name) {
+  const key = dishKey(restaurant, name);
+  let dish = dishes.find(d => dishKey(d.restaurant, d.name) === key);
+  if (!dish) {
+    dish = { restaurant, name: clean(name), firstSeen: today() };
+    dishes.push(dish);
+    clearTimeout(newDishTimer);
+    newDishTimer = setTimeout(async () => saveData(await grantedHandle()), 1000);
+  }
+  return dish;
+}
+
+// Marks or unmarks a favorite, on every row showing the dish, and saves.
+async function toggleFavorite(dish) {
+  dish.favorite = !dish.favorite;
+  if (!dish.favorite) {
+    delete dish.favorite;
+  }
+  const key = dishKey(dish.restaurant, dish.name);
+  document.querySelectorAll("#restaurants li").forEach(li => {
+    if (li.dataset.dish === key) {
+      showFavorite(li, !!dish.favorite);
+    }
+  });
+  await saveData(await fileHandle());
+}
+
+function showFavorite(li, favorite) {
+  li.classList.toggle("favorite", favorite);
+  const star = li.querySelector(".star");
+  star.textContent = favorite ? "★" : "☆";
+  star.setAttribute("aria-pressed", String(favorite));
+  star.title = favorite ? "Ta bort från favoriter" : "Markera som favorit";
+}
+
+const data = readData();
+let restaurants = data.restaurants;
+const dishes = data.dishes;
 const hidden = new Set(readStored(HIDDEN_KEY, []));
 const hiddenCategories = new Set(readStored(HIDDEN_CATEGORIES_KEY, []));
 const sections = new Map(); // restaurant URL -> { section, loaded }
@@ -869,7 +969,7 @@ async function deleteRestaurant() {
   if (confirm("Ta bort " + r.name + "?")) {
     restaurants = restaurants.filter(x => x !== r);
     buildRestaurants();
-    await saveRestaurants(handle);
+    await saveData(handle);
   }
 }
 
@@ -927,7 +1027,7 @@ async function addRestaurant(event) {
   hidden.delete(url);
   buildRestaurants();
   document.getElementById("restaurant-select").value = url;
-  await saveRestaurants(handle);
+  await saveData(handle);
 }
 
 function showDate() {
