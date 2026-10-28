@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dagens lunch</title>
+<style>
+  :root {
+    --bg: #f6f4f0; --card: #ffffff; --text: #1f1d1a; --muted: #6b665e;
+    --line: #e4dfd6; --accent: #b4532a; --warn-bg: #fff3d6; --warn: #7a5300;
+    --err-bg: #fde4e1; --err: #9b2c1f;
+    --meat-bg: #f9dfd9; --meat: #8e2a1b; --fish-bg: #dbe9f7; --fish: #1d4f86;
+    --veg-bg: #dcefd9; --veg: #2d6427;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #171614; --card: #22201d; --text: #ece8e1; --muted: #a39d93;
+      --line: #36322d; --accent: #e08a5f; --warn-bg: #3a2f14; --warn: #f0cf7a;
+      --err-bg: #3d1f1b; --err: #f2a397;
+      --meat-bg: #4a221c; --meat: #f4b0a3; --fish-bg: #1c3149; --fish: #a9cdf2;
+      --veg-bg: #213a1f; --veg: #acdba4;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .layout { display: flex; gap: 24px; max-width: 1000px; margin: 0 auto; padding: 24px 16px 48px; align-items: flex-start; }
+  aside {
+    flex: 0 0 240px; position: sticky; top: 24px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+  }
+  aside h2 { margin: 0 0 8px; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  aside label { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
+  aside input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+  .filter-actions { display: flex; gap: 6px; margin-top: 10px; }
+  .filter-actions button { padding: 3px 10px; font-size: .85rem; }
+  aside h2.second { margin-top: 18px; }
+  .row { display: flex; gap: 6px; margin-top: 8px; }
+  .row select, .row #url {
+    flex: 1; min-width: 0; font: inherit; font-size: .9rem; padding: 4px 6px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text);
+  }
+  .row button { padding: 3px 10px; font-size: .85rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { color: var(--muted); font-size: .85rem; margin-top: 6px; min-height: 1em; }
+  main { flex: 1; min-width: 0; }
+  .badges { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: 2px; }
+  aside .badges { margin-left: 0; }
+  .badge { font-size: .7rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+  .badge-meat { background: var(--meat-bg); color: var(--meat); }
+  .badge-fish { background: var(--fish-bg); color: var(--fish); }
+  .badge-veg { background: var(--veg-bg); color: var(--veg); }
+  .empty { color: var(--muted); margin-top: 18px; }
+  @media (max-width: 640px) {
+    .layout { flex-direction: column; align-items: stretch; }
+    aside { position: static; flex: none; }
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 1.8rem; }
+  #today { color: var(--muted); }
+  button {
+    font: inherit; padding: 6px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+  }
+  button:hover { border-color: var(--accent); }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; margin-top: 18px;
+  }
+  section h2 { margin: 0; font-size: 1.25rem; }
+  section h2 a { color: inherit; text-decoration: none; }
+  section h2 a:hover { color: var(--accent); }
+  .meta { color: var(--muted); font-size: .9rem; margin-top: 2px; }
+  .note { margin-top: 10px; padding: 6px 10px; border-radius: 6px; font-size: .9rem; background: var(--warn-bg); color: var(--warn); }
+  .error { background: var(--err-bg); color: var(--err); }
+  .group { margin: 14px 0 4px; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+  li:first-child { border-top: 0; }
+  .dish { flex: 1; min-width: 0; }
+  .cat { font-size: .75rem; font-weight: 600; letter-spacing: .05em; color: var(--accent); text-transform: uppercase; }
+  .name { font-weight: 600; }
+  .desc { color: var(--muted); }
+  .price { white-space: nowrap; font-weight: 600; }
+  .loading { color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="layout">
+<aside>
+  <h2>Restauranger</h2>
+  <div id="filter"></div>
+  <div class="filter-actions">
+    <button id="all" type="button">Alla</button>
+    <button id="none" type="button">Inga</button>
+  </div>
+  <h2 class="second">Kategori</h2>
+  <div id="category-filter"></div>
+  <h2 class="second">Hantera</h2>
+  <div class="row">
+    <select id="restaurant-select" aria-label="Restaurang"></select>
+    <button id="delete" type="button">Ta bort</button>
+  </div>
+  <form id="add-form" class="row">
+    <input id="url" type="text" inputmode="url" placeholder="Webbadress" aria-label="Webbadress till lunchmenyn">
+    <button id="add" type="submit">Lägg till</button>
+  </form>
+  <div id="add-status" class="status" aria-live="polite"></div>
+</aside>
+<main>
+  <header>
+    <div>
+      <h1>Dagens lunch</h1>
+      <div id="today"></div>
+    </div>
+    <button id="reload" type="button">Uppdatera</button>
+  </header>
+  <div id="restaurants"></div>
+  <div id="empty" class="empty" hidden>Ingen restaurang vald.</div>
+</main>
+</div>
+
+<script>
+// Pages are fetched through a proxy, since the restaurants' sites do not allow cross-origin
+// requests from a local file. The first proxy that answers is used.
+// jina: r.jina.ai, which can also run the page's JavaScript (see SITES, text).
+const PROXIES = [
+  { url: u => "https://r.jina.ai/" + u, headers: { "X-Return-Format": "html" }, jina: true },
+  { url: u => "https://api.allorigins.win/raw?url=" + encodeURIComponent(u) },
+  { url: u => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u) },
+];
+
+// The restaurant list ({ name, url }) is kept in this browser. A default that is new since the
+// list was stored is added to it once (so a deleted default stays deleted).
+const DEFAULT_RESTAURANTS = [
+  { name: "Ngon", url: "https://ngonrestaurang.se/dagen-lunch/" },
+  { name: "Operagrillen", url: "https://www.malmoopera.se/mat-och-dryck/lunch-i-operagrillen" },
+  { name: "Cafe Feed", url: "https://www.cafefeed.se/" },
+  { name: "La Bonne Vie", url: "https://labonnevie.se/lunchmeny" },
+];
+
+// Pages with their own parser, by URL; other pages use parseGeneric.
+// days: weekdays with lunch (1 = Monday .. 7 = Sunday), null when unknown.
+// parse(doc) returns { period, info, groups: [{ title, items: [{ category, name, desc, price }] }] }.
+// text: the page builds its menu with JavaScript; r.jina.ai runs it with these headers and
+// returns the page as Markdown (HTML from its browser engine needs an API key), and parse gets that text.
+const SITES = {
+  "https://ngonrestaurang.se/dagen-lunch/": { days: [1, 2, 3, 4, 5], parse: parseNgon },
+  "https://www.malmoopera.se/mat-och-dryck/lunch-i-operagrillen": { days: [2, 3, 4, 5], parse: parseOperagrillen },
+  "https://www.cafefeed.se/": {
+    days: [1, 2, 3, 4, 5],
+    parse: parseCafeFeed,
+    text: { "X-Engine": "browser", "X-No-Cache": "true", "X-Wait-For-Selector": "#week_num", "X-Timeout": "30" },
+  },
+  "https://labonnevie.se/lunchmeny": { days: [1, 2, 3, 4, 5], parse: parseBonneVie },
+};
+
+function siteFor(r) {
+  return SITES[r.url] || { days: null, parse: parseGeneric };
+}
+
+// Text of an element split into lines at <br> and block boundaries.
+function lines(el) {
+  const copy = el.cloneNode(true);
+  copy.querySelectorAll("br").forEach(br => br.replaceWith("\n"));
+  return copy.textContent.split("\n").map(clean).filter(Boolean);
+}
+
+function clean(s) {
+  return s.replace(/ /g, " ").replace(/\s+/g, " ").trim();
+}
+
+function formatPrice(s) {
+  s = clean(s);
+  return /^\d+$/.test(s) ? s + " kr" : s.replace(/(\d)\s*kr/gi, "$1 kr");
+}
+
+const isPrice = s => /^[\d\s.,\/–-]*\d[\d\s.,\/–-]*(kr|:-)?([\s\/]*\d+\s*(kr|:-)?)*$/i.test(s);
+const isUpper = s => /\p{L}/u.test(s) && s === s.toUpperCase();
+
+function parseNgon(doc) {
+  const headings = [...doc.querySelectorAll("h1, h2, h3")];
+  const week = headings.map(h => clean(h.textContent).match(/VECKA\s*(\d+)/i)).find(Boolean);
+  const hours = clean(doc.body.textContent).match(/VARDAGAR KL [\d.:]+\s*[-–]\s*[\d.:]+/i);
+  const items = [];
+  for (const h of headings) {
+    const label = clean(h.textContent);
+    if (!/^VAL\s*\d+$/i.test(label)) {
+      continue;
+    }
+    const box = h.closest(".e-con") || h.parentElement.parentElement.parentElement;
+    const price = [...box.querySelectorAll("h1, h2, h3")].map(e => clean(e.textContent)).find(isPrice);
+    const text = box.querySelector("p");
+    const all = text ? lines(text) : [];
+    const nameLines = [];
+    while (all.length && isUpper(all[0])) {
+      nameLines.push(all.shift());
+    }
+    items.push({
+      category: label,
+      name: nameLines.join(" ") || all.shift() || "",
+      desc: all.join(" "),
+      price: price ? formatPrice(price) : "",
+    });
+  }
+  return {
+    week: week ? Number(week[1]) : null,
+    period: week ? "Vecka " + week[1] : "",
+    info: "Inkl. sallad & måltidsdryck" + (hours ? " · " + hours[0].replace(/^VARDAGAR KL/i, "vardagar kl") : ""),
+    groups: [{ title: "", items }],
+  };
+}
+
+function parseOperagrillen(doc) {
+  const intro = [...doc.querySelectorAll("p")].map(p => clean(p.textContent)).find(t => /Lunch serveras/i.test(t));
+  const groups = [];
+  let period = "";
+  for (const block of doc.querySelectorAll(".paragraph--type--menu-food-drink")) {
+    const tag = block.querySelector(".tag");
+    const title = tag ? clean(tag.textContent) : "";
+    const items = [];
+    for (const p of block.querySelectorAll(".prose p")) {
+      const strong = p.querySelector("strong");
+      const category = strong ? clean(strong.textContent) : "";
+      const all = lines(p);
+      if (category && all.length && all[0].startsWith(category)) {
+        all[0] = clean(all[0].slice(category.length));
+      }
+      const prices = all.filter(isPrice);
+      const text = all.filter(l => !isPrice(l));
+      if (!prices.length || !text.length) {
+        continue;
+      }
+      items.push({ category, name: text[0], desc: text.slice(1).join(" "), price: prices.map(formatPrice).join(" ") });
+    }
+    if (/lunchmeny/i.test(title)) {
+      period = title.replace(/^Veckans lunchmeny\s*/i, "");
+      groups.unshift({ title: "Veckans lunch", items });
+    } else if (items.length) {
+      groups.push({ title, items });
+    }
+  }
+  return { period, info: intro ? intro.replace(/\.(?=\p{Lu})/gu, ". ") : "", groups };
+}
+
+const WEEKDAYS = ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
+const PRICE = /(\d{2,4}(?:[.,]\d{2})?)\s*(?:kr|:-|sek)\b\.?/gi;
+const SKIPPED = "script, style, noscript, template, svg, nav, header, footer, form, button, select, iframe";
+const BLOCKS = new Set(["P", "DIV", "LI", "TR", "TD", "TH", "H1", "H2", "H3", "H4", "H5", "H6", "SECTION",
+  "ARTICLE", "UL", "OL", "TABLE", "DL", "DT", "DD", "BLOCKQUOTE", "BR", "HR", "MAIN", "ASIDE"]);
+
+// The visible text of a page as lines, split at <br> and block elements.
+function pageLines(doc) {
+  const body = doc.body.cloneNode(true);
+  body.querySelectorAll(SKIPPED).forEach(e => e.remove());
+  let text = "";
+  const walk = node => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent;
+      return;
+    }
+    const block = BLOCKS.has(node.nodeName);
+    if (block) {
+      text += "\n";
+    }
+    node.childNodes.forEach(walk);
+    if (block) {
+      text += "\n";
+    }
+  };
+  walk(body);
+  return text.split("\n").map(clean).filter(Boolean);
+}
+
+const startsWithWeekday = line => WEEKDAYS.some(d => line.toLowerCase().startsWith(d));
+
+// Best effort for pages without their own parser. If the page has a heading for today
+// ("Onsdag", "Onsdag 28/10"), every line under it is a dish; otherwise every line with a
+// price is one (with the line before it as the name when the line holds only the price).
+function parseGeneric(doc) {
+  const all = pageLines(doc);
+  const today = WEEKDAYS[new Date().getDay()];
+  const start = all.findIndex(l => l.toLowerCase().startsWith(today) && l.length < 40);
+  const items = [];
+  if (start >= 0) {
+    for (let i = start + 1; i < all.length && !startsWithWeekday(all[i]) && items.length < 15; i++) {
+      const prices = all[i].match(PRICE) || [];
+      const name = clean(all[i].replace(PRICE, "").replace(/^[\s.:–-]+|[\s.:–-]+$/g, ""));
+      if (name && name.length < 250) {
+        items.push({ name, desc: "", price: prices.map(formatPrice).join(" ") });
+      }
+    }
+    return { period: all[start], info: "", groups: [{ title: "", items }] };
+  }
+  all.forEach((line, i) => {
+    const prices = line.match(PRICE);
+    if (!prices || line.length > 250) {
+      return;
+    }
+    let name = clean(line.replace(PRICE, "").replace(/^[\s.:–-]+|[\s.:–-]+$/g, ""));
+    if (!/\p{L}{2}/u.test(name) && i > 0 && !all[i - 1].match(PRICE)) {
+      name = all[i - 1];
+    }
+    if (/\p{L}{2}/u.test(name) && name.length < 250) {
+      items.push({ name, desc: "", price: prices.map(formatPrice).join(" ") });
+    }
+  });
+  return { period: "", info: "Tolkad automatiskt; kontrollera på sidan.", groups: [{ title: "", items }] };
+}
+
+const capitalize = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+// Markdown from r.jina.ai: "### Onsdag" followed by the dish of that day.
+function parseCafeFeed(text) {
+  const all = text.split("\n").map(clean).filter(Boolean);
+  const week = text.match(/LUNCH MENY\s*\(v\.\s*(\d+)\)/i);
+  const price = text.match(/\((\d+)\s*kr\)/i);
+  const hours = text.match(/serveras mellan kl\s*([\d.:]+\s*-\s*[\d.:]+)/i);
+  const days = [];
+  all.forEach((line, i) => {
+    const heading = line.match(/^[*-]?\s*#{1,6}\s*(\p{L}+)$/u);
+    const day = heading ? WEEKDAYS.indexOf(heading[1].toLowerCase()) : -1;
+    if (day >= 1 && day <= 5 && all[i + 1] && !all[i + 1].match(/^[*-]?\s*#/)) {
+      days.push({ day: WEEKDAYS[day], category: heading[1], name: all[i + 1], desc: "",
+        price: price ? price[1] + " kr" : "" });
+    }
+  });
+  const today = days.filter(d => d.day === WEEKDAYS[new Date().getDay()]);
+  return {
+    week: week ? Number(week[1]) : null,
+    period: week ? "Vecka " + week[1] : "",
+    info: hours ? "Kl " + hours[1] : "",
+    groups: [{ title: "", items: today.length ? today : days }],
+  };
+}
+
+// The weekdays (1 = Monday .. 7 = Sunday) named in a label such as "Måndag - Onsdag" or "Fredag";
+// null when it names none.
+function dayRange(label) {
+  const names = label.toLowerCase().match(/\p{L}+/gu) || [];
+  const days = names.map(n => WEEKDAYS.indexOf(n)).filter(d => d >= 0).map(d => d || 7);
+  if (!days.length) {
+    return null;
+  }
+  if (days.length === 2 && /[-–]/.test(label)) {
+    const range = [];
+    for (let d = days[0]; d <= days[1]; d++) {
+      range.push(d);
+    }
+    return range;
+  }
+  return days;
+}
+
+// The lunch is in .lab-menu--lw; the à la carte below it (.lab-menu--other) is skipped.
+// Dishes for other days of the week ("Torsdag - Fredag") are left out, except on days without lunch.
+function parseBonneVie(doc) {
+  const header = [...doc.querySelectorAll(".lab-menus--header p")].map(p => clean(p.textContent));
+  const week = header.map(t => t.match(/^v\.?\s*(\d+)$/i)).find(Boolean);
+  const all = [...doc.querySelectorAll(".lab-menu--lw .lab-menu-item")].map(item => {
+    const label = item.querySelector(".lab-menu-item--name__item");
+    const price = item.querySelector(".lab-menu-item--price");
+    const parts = [...item.querySelectorAll(".lab-menu-item--meals__item span")].map(s => clean(s.textContent));
+    const category = label ? clean(label.textContent) : "";
+    return {
+      days: dayRange(category),
+      category,
+      name: parts[0] || "",
+      desc: parts.slice(1).join(", "),
+      price: price ? formatPrice(price.textContent) : "",
+    };
+  });
+  const today = new Date().getDay() || 7;
+  const items = all.filter(i => !i.days || i.days.includes(today));
+  return {
+    week: week ? Number(week[1]) : null,
+    period: week ? "Vecka " + week[1] : "",
+    info: header.filter(t => !/^v\.?\s*\d+$/i.test(t)).join(" · ").replace(/\s*\/\/\s*/g, " kl "),
+    groups: [{ title: "", items: items.some(i => i.days) ? items : all }],
+  };
+}
+
+// Fetched pages, by URL, until "Uppdatera" is clicked.
+const documents = new Map();
+
+function fetchDocument(url) {
+  if (!documents.has(url)) {
+    const promise = fetchFresh(url);
+    promise.catch(() => documents.delete(url));
+    documents.set(url, promise);
+  }
+  return documents.get(url);
+}
+
+// Returns the page as a document, or as Markdown text for a site with text headers.
+async function fetchFresh(url) {
+  const text = SITES[url] && SITES[url].text;
+  let lastError = new Error("ingen proxy");
+  for (const proxy of PROXIES) {
+    if (text && !proxy.jina) {
+      continue;
+    }
+    try {
+      const response = await fetch(proxy.url(url), { headers: text || proxy.headers || {}, cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("HTTP " + response.status);
+      }
+      const body = await response.text();
+      return text ? body : new DOMParser().parseFromString(body, "text/html");
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw lastError;
+}
+
+// ISO 8601 week number.
+function isoWeek(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
+  return Math.ceil(((d - Date.UTC(d.getUTCFullYear(), 0, 1)) / 86400000 + 1) / 7);
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) {
+    e.className = cls;
+  }
+  if (text) {
+    e.textContent = text;
+  }
+  return e;
+}
+
+const CATEGORIES = [
+  { id: "meat", label: "Meat" },
+  { id: "fish", label: "Fish" },
+  { id: "veg", label: "Vegetarian/Vegan" },
+];
+
+// Swedish keywords, matched as parts of words (so "kalvköttbullar" matches "kött").
+const KEYWORDS = {
+  meat: ["kött", "fläsk", "biff", "kyckling", "kalv", "oxfilé", "lamm", "bacon", "skinka", "korv",
+    "anka", "ankbröst", "kalkon", "högrev", "färs", "kålpudding", "kåldolm", "pytt", "entrecote", "gris", "vilt", "hjort", "älg", "renskav",
+    "chorizo", "pancetta", "salsiccia", "prosciutto", "kebab", "schnitzel", "wallenberg", "pulled pork"],
+  fish: ["fisk", "lax", "torsk", "sej", "kolja", "räk", "tonfisk", "sill", "strömming", "skaldjur", "mussl",
+    "kräft", "hummer", "gös", "abborre", "rödspätta", "sjötunga", "röding", "makrill", "bläckfisk",
+    "krabb", "pilgrim", "scampi", "hälleflundra", "ostron", "kaviar", "löjrom"],
+  veg: ["vegan", "vegetar", "vego", "tofu", "halloumi", "svamp", "portobello", "bönor", "linser", "kikärt",
+    "falafel", "mozzarella", "fetaost", "hummus", "quorn", "anamma", "oumph", "soja", "aubergine",
+    "grönsak", "pumpa", "spenat", "paneer", "tempeh", "seitan", "ost"],
+};
+// Words that make a dish vegetarian even if a meat word appears ("sojakött", "Anamma färs").
+const VEG_PRODUCTS = ["vegan", "vegetar", "vego", "anamma", "oumph", "quorn", "planted", "sojakött", "tofu"];
+
+// Returns the category ids of a dish: usually one, several when the guest chooses
+// ("med kyckling, räkor eller halloumi"), none when nothing is recognised.
+function categorize(item) {
+  const label = (item.category || "").toLowerCase();
+  if (/kött|meat/.test(label)) {
+    return ["meat"];
+  }
+  if (/fisk|skaldjur|fish/.test(label)) {
+    return ["fish"];
+  }
+  if (/veg/.test(label)) {
+    return ["veg"];
+  }
+  const text = (item.name + " " + item.desc).toLowerCase();
+  const has = words => words.some(w => text.includes(w));
+  const found = CATEGORIES.map(c => c.id).filter(id => has(KEYWORDS[id]));
+  if (/\beller\b/.test(text)) {
+    return found;
+  }
+  if (has(VEG_PRODUCTS)) {
+    return ["veg"];
+  }
+  const animal = found.filter(id => id !== "veg");
+  return animal.length ? animal : found;
+}
+
+function categoryBadges(cats) {
+  const box = el("span", "badges");
+  for (const id of cats) {
+    box.append(el("span", "badge badge-" + id, CATEGORIES.find(c => c.id === id).label));
+  }
+  return box;
+}
+
+async function showRestaurant(r, section, now) {
+  const head = el("h2");
+  const link = el("a", "", r.name);
+  link.href = r.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  head.append(link);
+  const loading = el("div", "loading", "Hämtar meny …");
+  section.replaceChildren(head, loading);
+
+  const site = siteFor(r);
+  let menu;
+  try {
+    menu = site.parse(await fetchDocument(r.url));
+  } catch (e) {
+    loading.replaceWith(el("div", "note error", "Kunde inte hämta menyn (" + e.message + ")."));
+    return;
+  }
+  loading.remove();
+
+  section.append(el("div", "meta", [menu.period, menu.info].filter(Boolean).join(" · ")));
+  const weekday = now.getDay() || 7;
+  if (site.days && !site.days.includes(weekday)) {
+    section.append(el("div", "note", "Ingen lunch idag. Menyn nedan gäller serveringsdagarna."));
+  } else if (menu.week && menu.week !== isoWeek(now)) {
+    section.append(el("div", "note", "Menyn gäller vecka " + menu.week + ", inte denna vecka."));
+  }
+
+  const count = menu.groups.reduce((n, g) => n + g.items.length, 0);
+  if (!count) {
+    section.append(el("div", "note error", "Hittade inga rätter på sidan; sidans upplägg har kanske ändrats."));
+    return;
+  }
+  for (const group of menu.groups) {
+    if (!group.items.length) {
+      continue;
+    }
+    const box = el("div", "dish-group");
+    if (group.title && menu.groups.length > 1) {
+      box.append(el("div", "group", group.title));
+    }
+    const list = el("ul");
+    for (const item of group.items) {
+      const cats = categorize(item);
+      const li = el("li");
+      li.dataset.cats = cats.join(" ");
+      const dish = el("div", "dish");
+      if (item.category) {
+        dish.append(el("div", "cat", item.category));
+      }
+      const name = el("div", "name", item.name);
+      name.append(categoryBadges(cats));
+      dish.append(name);
+      if (item.desc) {
+        dish.append(el("div", "desc", item.desc));
+      }
+      li.append(dish, el("div", "price", item.price));
+      list.append(li);
+    }
+    box.append(list);
+    section.append(box);
+  }
+  section.append(el("div", "empty no-match", "Inga rätter i de valda kategorierna."));
+  applyCategoryFilter();
+}
+
+// Hides dishes whose categories are all unchecked; dishes without a category are always shown.
+function applyCategoryFilter() {
+  for (const li of document.querySelectorAll("#restaurants li")) {
+    const cats = li.dataset.cats.split(" ").filter(Boolean);
+    li.hidden = cats.length > 0 && cats.every(id => hiddenCategories.has(id));
+  }
+  for (const box of document.querySelectorAll(".dish-group")) {
+    box.hidden = !box.querySelector("li:not([hidden])");
+  }
+  for (const section of document.querySelectorAll("#restaurants section")) {
+    const note = section.querySelector(".no-match");
+    if (note) {
+      note.hidden = !!section.querySelector("li:not([hidden])");
+    }
+  }
+  writeHidden(HIDDEN_CATEGORIES_KEY, hiddenCategories);
+}
+
+// Kept in this browser: the restaurant list, and the restaurants (URLs) and categories (ids)
+// that the filters hide.
+const RESTAURANTS_KEY = "lunch.restaurants";
+const HIDDEN_KEY = "lunch.hiddenUrls";
+const HIDDEN_CATEGORIES_KEY = "lunch.hiddenCategories";
+
+function readStored(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value === null ? fallback : value;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+function writeStored(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    // Not stored; the page still works until it is closed.
+  }
+}
+
+function writeHidden(key, set) {
+  writeStored(key, [...set]);
+}
+
+// The defaults this browser has seen; Ngon and Operagrillen were the defaults before this was stored.
+const KNOWN_DEFAULTS_KEY = "lunch.knownDefaults";
+
+function readRestaurants() {
+  const stored = readStored(RESTAURANTS_KEY, null);
+  if (!Array.isArray(stored)) {
+    return [...DEFAULT_RESTAURANTS];
+  }
+  const known = new Set(readStored(KNOWN_DEFAULTS_KEY, DEFAULT_RESTAURANTS.slice(0, 2).map(r => r.url)));
+  const added = DEFAULT_RESTAURANTS.filter(d => !known.has(d.url) && !stored.some(r => r.url === d.url));
+  return [...stored, ...added];
+}
+
+let restaurants = readRestaurants();
+writeStored(KNOWN_DEFAULTS_KEY, DEFAULT_RESTAURANTS.map(r => r.url));
+const hidden = new Set(readStored(HIDDEN_KEY, []));
+const hiddenCategories = new Set(readStored(HIDDEN_CATEGORIES_KEY, []));
+const sections = new Map(); // restaurant URL -> { section, loaded }
+
+// Shows the selected restaurants and fetches a menu the first time its restaurant is shown.
+function applyFilter() {
+  const now = new Date();
+  for (const r of restaurants) {
+    const entry = sections.get(r.url);
+    entry.section.hidden = hidden.has(r.url);
+    if (!entry.section.hidden && !entry.loaded) {
+      entry.loaded = true;
+      showRestaurant(r, entry.section, now);
+    }
+  }
+  const empty = document.getElementById("empty");
+  empty.textContent = restaurants.length ? "Ingen restaurang vald." : "Inga restauranger. Lägg till en webbadress till vänster.";
+  empty.hidden = restaurants.some(r => !hidden.has(r.url));
+  writeHidden(HIDDEN_KEY, hidden);
+}
+
+// A checkbox that is checked while key is not in set; content is the label text or nodes.
+function filterCheckbox(set, key, onChange, ...content) {
+  const label = el("label");
+  const box = el("input");
+  box.type = "checkbox";
+  box.checked = !set.has(key);
+  box.addEventListener("change", () => {
+    if (box.checked) {
+      set.delete(key);
+    } else {
+      set.add(key);
+    }
+    onChange();
+  });
+  label.append(box, ...content);
+  return label;
+}
+
+// Builds the restaurant checkboxes, the drop-down and a section per restaurant. Sections of
+// restaurants still in the list are kept, so their menus are not fetched again.
+function buildRestaurants() {
+  const filter = document.getElementById("filter");
+  const select = document.getElementById("restaurant-select");
+  const container = document.getElementById("restaurants");
+  filter.replaceChildren();
+  select.replaceChildren();
+  for (const [url, entry] of sections) {
+    if (!restaurants.some(r => r.url === url)) {
+      entry.section.remove();
+      sections.delete(url);
+      hidden.delete(url);
+    }
+  }
+  for (const r of restaurants) {
+    filter.append(filterCheckbox(hidden, r.url, applyFilter, r.name));
+    const option = el("option", "", r.name);
+    option.value = r.url;
+    select.append(option);
+    if (!sections.has(r.url)) {
+      sections.set(r.url, { section: el("section"), loaded: false });
+    }
+    container.append(sections.get(r.url).section);
+  }
+  document.getElementById("delete").disabled = !restaurants.length;
+  writeStored(RESTAURANTS_KEY, restaurants);
+  applyFilter();
+}
+
+function buildCategoryFilter() {
+  const categoryFilter = document.getElementById("category-filter");
+  for (const c of CATEGORIES) {
+    categoryFilter.append(filterCheckbox(hiddenCategories, c.id, applyCategoryFilter, categoryBadges([c.id])));
+  }
+}
+
+function setAll(checked) {
+  document.querySelectorAll("#filter input").forEach(box => {
+    box.checked = checked;
+  });
+  restaurants.forEach(r => (checked ? hidden.delete(r.url) : hidden.add(r.url)));
+  applyFilter();
+}
+
+function deleteRestaurant() {
+  const url = document.getElementById("restaurant-select").value;
+  const r = restaurants.find(x => x.url === url);
+  if (r && confirm("Ta bort " + r.name + "?")) {
+    restaurants = restaurants.filter(x => x !== r);
+    buildRestaurants();
+  }
+}
+
+// The restaurant's name: from the defaults, else og:site_name, else the first part of the title,
+// else the host. doc is Markdown text for a site with text headers.
+function siteName(doc, url) {
+  const known = DEFAULT_RESTAURANTS.find(r => r.url === url);
+  if (known) {
+    return known.name;
+  }
+  const isText = typeof doc === "string";
+  const meta = isText ? null : doc.querySelector('meta[property="og:site_name"]');
+  const fromMeta = meta ? clean(meta.content || "") : "";
+  const title = isText ? (doc.match(/^Title: (.*)$/m) || ["", ""])[1] : doc.title;
+  const fromTitle = clean((title || "").split(/\s[|–—-]\s/)[0]);
+  const name = fromMeta || fromTitle || new URL(url).hostname.replace(/^www\./, "");
+  return name.length > 40 ? new URL(url).hostname.replace(/^www\./, "") : name;
+}
+
+async function addRestaurant(event) {
+  event.preventDefault();
+  const input = document.getElementById("url");
+  const status = document.getElementById("add-status");
+  let url;
+  try {
+    url = new URL(input.value.trim().match(/^https?:\/\//i) ? input.value.trim() : "https://" + input.value.trim());
+  } catch (e) {
+    url = null;
+  }
+  if (!url || !/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) {
+    status.textContent = "Ogiltig webbadress.";
+    return;
+  }
+  url = url.href;
+  if (restaurants.some(r => r.url === url)) {
+    status.textContent = "Finns redan i listan.";
+    return;
+  }
+  const button = document.getElementById("add");
+  button.disabled = true;
+  status.textContent = "Hämtar sidan …";
+  let name;
+  try {
+    name = siteName(await fetchDocument(url), url);
+  } catch (e) {
+    status.textContent = "Kunde inte hämta sidan (" + e.message + ").";
+    button.disabled = false;
+    return;
+  }
+  button.disabled = false;
+  status.textContent = "";
+  input.value = "";
+  restaurants = [...restaurants, { name, url }];
+  hidden.delete(url);
+  buildRestaurants();
+  document.getElementById("restaurant-select").value = url;
+}
+
+function showDate() {
+  const now = new Date();
+  const date = now.toLocaleDateString("sv-SE", { weekday: "long", day: "numeric", month: "long" });
+  document.getElementById("today").textContent =
+    date.charAt(0).toUpperCase() + date.slice(1) + " · vecka " + isoWeek(now);
+}
+
+// Fetches the shown menus again; hidden ones are fetched when they are shown.
+function load() {
+  showDate();
+  documents.clear();
+  sections.forEach(entry => {
+    entry.loaded = false;
+  });
+  applyFilter();
+}
+
+document.getElementById("reload").addEventListener("click", load);
+document.getElementById("all").addEventListener("click", () => setAll(true));
+document.getElementById("none").addEventListener("click", () => setAll(false));
+document.getElementById("delete").addEventListener("click", deleteRestaurant);
+document.getElementById("add-form").addEventListener("submit", addRestaurant);
+showDate();
+buildCategoryFilter();
+buildRestaurants();
+</script>
+</body>
+</html>
