@@ -153,6 +153,7 @@ const DEFAULT_RESTAURANTS = [
   { name: "Cafe Feed", url: "https://www.cafefeed.se/" },
   { name: "La Bonne Vie", url: "https://labonnevie.se/lunchmeny" },
   { name: "Osteria di La", url: "https://osteriadila.se/" },
+  { name: "Green Mango", url: "https://www.greenmango.se/lunch" },
 ];
 
 // Pages with their own parser, by URL; other pages use parseGeneric.
@@ -170,6 +171,7 @@ const SITES = {
   },
   "https://labonnevie.se/lunchmeny": { days: [1, 2, 3, 4, 5], parse: parseBonneVie },
   "https://osteriadila.se/": { days: [1, 2, 3, 4, 5], parse: parseOsteria, load: loadOsteria },
+  "https://www.greenmango.se/lunch": { days: [1, 2, 3, 4, 5], parse: parseGreenMango },
 };
 
 function siteFor(r) {
@@ -458,6 +460,62 @@ function parseOsteria(text) {
   };
 }
 
+// A menu per weekday: "MÅNDAG", then per dish "1: KENG PED", a description, the price
+// (or variants: "Tofu", "135 kr", "Biff", "139 kr") and the spice level. "KOMBOLUNCH" (two dishes
+// for one price) is an offer, not a dish; it goes in the info. The drinks ("Cola | ...") end the menu.
+function parseGreenMango(doc) {
+  const all = pageLines(doc);
+  const info = all.find(l => /^Lunch från/i.test(l)) || "";
+  const days = [];
+  let day = null;
+  let dish = null;
+  let variant = "";
+  for (const line of all) {
+    const weekday = WEEKDAYS.indexOf(line.toLowerCase());
+    if (weekday >= 1 && weekday <= 5) {
+      day = { day: weekday, name: capitalize(line.toLowerCase()), items: [] };
+      days.push(day);
+      dish = null;
+      continue;
+    }
+    if (!day) {
+      continue;
+    }
+    if (/^(Cola\b|Observera)/i.test(line)) {
+      break;
+    }
+    const start = line.match(/^\d+\s*:\s*(.+)$/);
+    if (start) {
+      dish = /kombo/i.test(start[1]) ? null : { category: "", name: start[1], desc: "", price: "" };
+      if (dish) {
+        day.items.push(dish);
+      }
+      variant = "";
+      continue;
+    }
+    if (!dish) {
+      continue;
+    }
+    if (line.match(PRICE)) {
+      dish.price = [dish.price, [variant, formatPrice(line)].filter(Boolean).join(" ")].filter(Boolean).join(" / ");
+      variant = "";
+    } else if (/^(mild|medium|stark)$/i.test(line)) {
+      dish.desc = clean(dish.desc + " Styrka: " + line.toLowerCase() + ".");
+    } else if (!dish.desc) {
+      dish.desc = line;
+    } else if (line.length < 20) {
+      variant = line;
+    }
+  }
+  const today = days.find(d => d.day === (new Date().getDay() || 7));
+  const shown = today ? [today] : days;
+  return {
+    period: today ? today.name : "",
+    info: info.replace(/\s*\|\s*/g, " · ").replace(/\s*Måndagar\s*-\s*Fredagar:/i, " · Mån–fre"),
+    groups: shown.map(d => ({ title: today ? "" : d.name, items: d.items })),
+  };
+}
+
 // Fetched pages, by URL, until "Uppdatera" is clicked.
 const documents = new Map();
 
@@ -533,10 +591,13 @@ const KEYWORDS = {
     "kummel", "pesce"],
   veg: ["vegan", "vegetar", "vego", "tofu", "halloumi", "svamp", "portobello", "bönor", "linser", "kikärt",
     "falafel", "mozzarella", "fetaost", "hummus", "quorn", "anamma", "oumph", "soja", "aubergine",
-    "grönsak", "pumpa", "spenat", "paneer", "tempeh", "seitan", "ost"],
+    "grönsak", "pumpa", "spenat", "paneer", "tempeh", "seitan", "ost", "blomkål", "vårrull"],
 };
 // Words that make a dish vegetarian even if a meat word appears ("sojakött", "Anamma färs").
-const VEG_PRODUCTS = ["vegan", "vegetar", "vego", "anamma", "oumph", "quorn", "planted", "sojakött", "tofu"];
+const VEG_PRODUCTS = ["vegan", "vegetar", "vego", "anamma", "oumph", "quorn", "planted", "sojakött", "tofu",
+  "grönsaksbiff"];
+// Sauces that do not make a dish a fish dish.
+const IGNORED = /ostronsås|fisksås/g;
 
 // Returns the category ids of a dish: usually one, several when the guest chooses
 // ("med kyckling, räkor eller halloumi"), none when nothing is recognised.
@@ -551,7 +612,7 @@ function categorize(item) {
   if (/veg/.test(label)) {
     return ["veg"];
   }
-  const text = (item.name + " " + item.desc).toLowerCase();
+  const text = (item.name + " " + item.desc).toLowerCase().replace(IGNORED, "");
   const has = words => words.some(w => text.includes(w));
   const found = CATEGORIES.map(c => c.id).filter(id => has(KEYWORDS[id]));
   if (/\beller\b/.test(text)) {
