@@ -53,6 +53,8 @@
   }
   .star:hover, li.favorite .star { color: var(--accent); }
   li.favorite .name { color: var(--accent); }
+  .count { margin-left: auto; padding-left: 8px; color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
+  section.favorites { border-color: var(--accent); }
   main { flex: 1; min-width: 0; }
   .badges { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: 2px; }
   aside .badges { margin-left: 0; }
@@ -127,6 +129,7 @@
     </div>
     <button id="reload" type="button">Uppdatera</button>
   </header>
+  <section id="favorites" class="favorites" hidden></section>
   <div id="restaurants"></div>
   <div id="empty" class="empty" hidden>Ingen restaurang vald.</div>
 </main>
@@ -569,7 +572,37 @@ function categoryBadges(cats) {
   return box;
 }
 
-async function showRestaurant(r, section, now) {
+// A row for a dish of today's menu. restaurantName: shown above the dish (in the favorites).
+function dishRow(dish, restaurantName) {
+  const { item, cats, known } = dish;
+  const li = el("li");
+  li.dataset.cats = cats.join(" ");
+  li.dataset.dish = dishKey(known.restaurant, known.name);
+  const star = el("button", "star");
+  star.type = "button";
+  star.addEventListener("click", () => toggleFavorite(known));
+  const info = el("div", "dish");
+  const label = [restaurantName, item.category].filter(Boolean).join(" · ");
+  if (label) {
+    info.append(el("div", "cat", label));
+  }
+  const name = el("div", "name", item.name);
+  name.append(categoryBadges(cats));
+  info.append(name);
+  if (item.desc) {
+    info.append(el("div", "desc", item.desc));
+  }
+  li.append(star, info, el("div", "price", item.price));
+  showFavorite(li, !!known.favorite);
+  return li;
+}
+
+// Fetches and shows the menu of a restaurant; entry.dishes gets today's dishes
+// ({ item, cats, known }), empty when the restaurant has no lunch today.
+async function showRestaurant(r, entry, now) {
+  const section = entry.section;
+  entry.state = "loading";
+  entry.dishes = [];
   const head = el("h2");
   const link = el("a", "", r.name);
   link.href = r.url;
@@ -585,13 +618,17 @@ async function showRestaurant(r, section, now) {
     menu = site.parse(await fetchDocument(r.url));
   } catch (e) {
     loading.replaceWith(el("div", "note error", "Kunde inte hämta menyn (" + e.message + ")."));
+    entry.state = "error";
+    updateSummary();
     return;
   }
   loading.remove();
+  entry.state = "done";
 
   section.append(el("div", "meta", [menu.period, menu.info].filter(Boolean).join(" · ")));
   const weekday = now.getDay() || 7;
-  if (site.days && !site.days.includes(weekday)) {
+  const servesToday = !site.days || site.days.includes(weekday);
+  if (!servesToday) {
     section.append(el("div", "note", "Ingen lunch idag. Menyn nedan gäller serveringsdagarna."));
   } else if (menu.week && menu.week !== isoWeek(now)) {
     section.append(el("div", "note", "Menyn gäller vecka " + menu.week + ", inte denna vecka."));
@@ -600,6 +637,7 @@ async function showRestaurant(r, section, now) {
   const count = menu.groups.reduce((n, g) => n + g.items.length, 0);
   if (!count) {
     section.append(el("div", "note error", "Hittade inga rätter på sidan; sidans upplägg har kanske ändrats."));
+    updateSummary();
     return;
   }
   for (const group of menu.groups) {
@@ -612,38 +650,45 @@ async function showRestaurant(r, section, now) {
     }
     const list = el("ul");
     for (const item of group.items) {
-      const cats = categorize(item);
-      const known = recordDish(r.url, item.name);
-      const li = el("li");
-      li.dataset.cats = cats.join(" ");
-      li.dataset.dish = dishKey(known.restaurant, known.name);
-      const star = el("button", "star");
-      star.type = "button";
-      star.addEventListener("click", () => toggleFavorite(known));
-      const dish = el("div", "dish");
-      if (item.category) {
-        dish.append(el("div", "cat", item.category));
+      const dish = { item, cats: categorize(item), known: recordDish(r.url, item.name) };
+      if (servesToday) {
+        entry.dishes.push(dish);
       }
-      const name = el("div", "name", item.name);
-      name.append(categoryBadges(cats));
-      dish.append(name);
-      if (item.desc) {
-        dish.append(el("div", "desc", item.desc));
-      }
-      li.append(star, dish, el("div", "price", item.price));
-      showFavorite(li, !!known.favorite);
-      list.append(li);
+      list.append(dishRow(dish));
     }
     box.append(list);
     section.append(box);
   }
   section.append(el("div", "empty no-match", "Inga rätter i de valda kategorierna."));
+  updateSummary();
+}
+
+// The counts next to the restaurants and categories, and today's favorites at the top.
+// Category counts and favorites cover the checked restaurants.
+function updateSummary() {
+  const shown = restaurants.filter(r => !hidden.has(r.url) && sections.has(r.url));
+  for (const r of restaurants) {
+    const entry = sections.get(r.url);
+    if (entry && entry.count) {
+      entry.count.textContent = entry.state === "done" ? String(entry.dishes.length)
+        : entry.state === "error" ? "–" : "…";
+    }
+  }
+  const today = shown.flatMap(r => sections.get(r.url).dishes.map(dish => ({ r, dish })));
+  for (const c of CATEGORIES) {
+    categoryCounts.get(c.id).textContent = String(today.filter(t => t.dish.cats.includes(c.id)).length);
+  }
+  const favorites = today.filter(t => t.dish.known.favorite);
+  const list = el("ul");
+  favorites.forEach(t => list.append(dishRow(t.dish, t.r.name)));
+  const section = document.getElementById("favorites");
+  section.replaceChildren(el("h2", "", "Dina favoriter idag"), list);
   applyCategoryFilter();
 }
 
 // Hides dishes whose categories are all unchecked; dishes without a category are always shown.
 function applyCategoryFilter() {
-  for (const li of document.querySelectorAll("#restaurants li")) {
+  for (const li of document.querySelectorAll("main li")) {
     const cats = li.dataset.cats.split(" ").filter(Boolean);
     li.hidden = cats.length > 0 && cats.every(id => hiddenCategories.has(id));
   }
@@ -656,6 +701,8 @@ function applyCategoryFilter() {
       note.hidden = !!section.querySelector("li:not([hidden])");
     }
   }
+  const favorites = document.getElementById("favorites");
+  favorites.hidden = !favorites.querySelector("li:not([hidden])");
   writeHidden(HIDDEN_CATEGORIES_KEY, hiddenCategories);
 }
 
@@ -862,7 +909,9 @@ async function toggleFavorite(dish) {
       showFavorite(li, !!dish.favorite);
     }
   });
-  await saveData(await fileHandle());
+  const handle = fileHandle(); // started first: the file dialog needs the click
+  updateSummary();
+  await saveData(await handle);
 }
 
 function showFavorite(li, favorite) {
@@ -878,23 +927,27 @@ let restaurants = data.restaurants;
 const dishes = data.dishes;
 const hidden = new Set(readStored(HIDDEN_KEY, []));
 const hiddenCategories = new Set(readStored(HIDDEN_CATEGORIES_KEY, []));
-const sections = new Map(); // restaurant URL -> { section, loaded }
+// restaurant URL -> { section, loaded, state, dishes, count }; count: the count in the filter.
+const sections = new Map();
+const categoryCounts = new Map(); // category id -> its count in the filter
 
-// Shows the selected restaurants and fetches a menu the first time its restaurant is shown.
+// Shows the selected restaurants. Every menu is fetched (also of unchecked restaurants), so the
+// filter can show how many dishes each restaurant has today.
 function applyFilter() {
   const now = new Date();
   for (const r of restaurants) {
     const entry = sections.get(r.url);
     entry.section.hidden = hidden.has(r.url);
-    if (!entry.section.hidden && !entry.loaded) {
+    if (!entry.loaded) {
       entry.loaded = true;
-      showRestaurant(r, entry.section, now);
+      showRestaurant(r, entry, now);
     }
   }
   const empty = document.getElementById("empty");
   empty.textContent = restaurants.length ? "Ingen restaurang vald." : "Inga restauranger. Lägg till en webbadress till vänster.";
   empty.hidden = restaurants.some(r => !hidden.has(r.url));
   writeHidden(HIDDEN_KEY, hidden);
+  updateSummary();
 }
 
 // A checkbox that is checked while key is not in set; content is the label text or nodes.
@@ -931,14 +984,16 @@ function buildRestaurants() {
     }
   }
   for (const r of restaurants) {
-    filter.append(filterCheckbox(hidden, r.url, applyFilter, r.name));
+    if (!sections.has(r.url)) {
+      sections.set(r.url, { section: el("section"), loaded: false, state: "loading", dishes: [] });
+    }
+    const entry = sections.get(r.url);
+    entry.count = el("span", "count");
+    filter.append(filterCheckbox(hidden, r.url, applyFilter, r.name, entry.count));
     const option = el("option", "", r.name);
     option.value = r.url;
     select.append(option);
-    if (!sections.has(r.url)) {
-      sections.set(r.url, { section: el("section"), loaded: false });
-    }
-    container.append(sections.get(r.url).section);
+    container.append(entry.section);
   }
   document.getElementById("delete").disabled = !restaurants.length;
   applyFilter();
@@ -947,7 +1002,9 @@ function buildRestaurants() {
 function buildCategoryFilter() {
   const categoryFilter = document.getElementById("category-filter");
   for (const c of CATEGORIES) {
-    categoryFilter.append(filterCheckbox(hiddenCategories, c.id, applyCategoryFilter, categoryBadges([c.id])));
+    const count = el("span", "count");
+    categoryCounts.set(c.id, count);
+    categoryFilter.append(filterCheckbox(hiddenCategories, c.id, applyCategoryFilter, categoryBadges([c.id]), count));
   }
 }
 
