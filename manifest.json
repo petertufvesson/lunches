@@ -1,0 +1,13 @@
+{
+  "name": "Dagens lunch",
+  "short_name": "Lunch",
+  "start_url": "lunch.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f4f0",
+  "theme_color": "#b4532a",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
